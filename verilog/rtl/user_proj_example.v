@@ -68,21 +68,11 @@ module user_proj_example #(
     // IRQ
     output [2:0] irq
 );
-    wire clk;
-    wire rst;
+    wire clk, reset, door_close, start, filled, detergent_added, cycle_timeout, drained, spin_timeout;
+	wire door_lock, motor_on, fill_value_on, drain_value_on, done, soap_wash, water_wash; 
 
-    wire [`MPRJ_IO_PADS-1:0] io_in;
-    wire [`MPRJ_IO_PADS-1:0] io_out;
-    wire [`MPRJ_IO_PADS-1:0] io_oeb;
-
-    wire [31:0] rdata; 
-    wire [31:0] wdata;
-    wire [BITS-1:0] count;
-
-    wire valid;
-    wire [3:0] wstrb;
-    wire [31:0] la_write;
-
+    wire [2:0] current_state; 
+	wire [2:0] next_state;
     // WB MI A
     assign valid = wbs_cyc_i && wbs_stb_i; 
     assign wstrb = wbs_sel_i & {4{wbs_we_i}};
@@ -104,62 +94,255 @@ module user_proj_example #(
     assign clk = (~la_oenb[64]) ? la_data_in[64]: wb_clk_i;
     assign rst = (~la_oenb[65]) ? la_data_in[65]: wb_rst_i;
 
-    counter #(
-        .BITS(BITS)
-    ) counter(
-        .clk(clk),
-        .reset(rst),
-        .ready(wbs_ack_o),
-        .valid(valid),
-        .rdata(rdata),
-        .wdata(wbs_dat_i),
-        .wstrb(wstrb),
-        .la_write(la_write),
-        .la_input(la_data_in[63:32]),
-        .count(count)
-    );
-
+    iiitb_wm wm (clk, reset, door_close, start, filled, detergent_added, cycle_timeout, drained, spin_timeout, door_lock, motor_on, fill_value_on, drain_value_on, done, soap_wash, water_wash);
 endmodule
 
-module counter #(
-    parameter BITS = 32
-)(
-    input clk,
-    input reset,
-    input valid,
-    input [3:0] wstrb,
-    input [BITS-1:0] wdata,
-    input [BITS-1:0] la_write,
-    input [BITS-1:0] la_input,
-    output ready,
-    output [BITS-1:0] rdata,
-    output [BITS-1:0] count
-);
-    reg ready;
-    reg [BITS-1:0] count;
-    reg [BITS-1:0] rdata;
 
-    always @(posedge clk) begin
-        if (reset) begin
-            count <= 0;
-            ready <= 0;
-        end else begin
-            ready <= 1'b0;
-            if (~|la_write) begin
-                count <= count + 1;
-            end
-            if (valid && !ready) begin
-                ready <= 1'b1;
-                rdata <= count;
-                if (wstrb[0]) count[7:0]   <= wdata[7:0];
-                if (wstrb[1]) count[15:8]  <= wdata[15:8];
-                if (wstrb[2]) count[23:16] <= wdata[23:16];
-                if (wstrb[3]) count[31:24] <= wdata[31:24];
-            end else if (|la_write) begin
-                count <= la_write & la_input;
-            end
-        end
-    end
+module iiitb_wm(clk, reset, door_close, start, filled, detergent_added, cycle_timeout, drained, spin_timeout, door_lock, motor_on, fill_value_on, drain_value_on, done, soap_wash, water_wash);
 
+	input clk, reset, door_close, start, filled, detergent_added, cycle_timeout, drained, spin_timeout;
+	output reg door_lock, motor_on, fill_value_on, drain_value_on, done, soap_wash, water_wash; 
+	
+	//defining the states
+	parameter check_door = 3'b000;
+	parameter fill_water = 3'b001;
+	parameter add_detergent = 3'b010;
+	parameter cycle = 3'b011;
+	parameter drain_water = 3'b100;
+	parameter spin = 3'b101;
+        
+        
+	reg[2:0] current_state; 
+	reg [2:0] next_state;
+	
+	always@(*)
+	begin
+	case(current_state)
+		check_door:
+			if(start==1 && door_close==1)
+			begin
+				next_state = fill_water;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 1;
+				soap_wash = 0;
+				water_wash = 0;
+				done = 0;
+			end
+			else
+			begin
+				next_state = current_state;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 0;
+				soap_wash = 0;
+				water_wash = 0;
+				done = 0;
+			end
+			
+			fill_water:
+			if (filled==1)
+			begin
+				if(soap_wash == 0)
+				begin
+					next_state = add_detergent;
+					motor_on = 0;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 0;
+					water_wash = 0;
+					done = 0;
+				end
+				else
+				begin
+					next_state = cycle;
+					motor_on = 0;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 1;
+					done = 0;
+				end
+			end
+			else
+			begin
+				next_state = current_state;
+				motor_on = 0;
+				fill_value_on = 1;
+				drain_value_on = 0;
+				door_lock = 1;
+				done = 0;
+                                soap_wash = 0;
+                                water_wash = 0;
+			end
+			add_detergent:
+			if(detergent_added==1)
+			begin
+				next_state = cycle;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 1;
+				soap_wash = 1;
+				done = 0;
+                                water_wash = 0;
+			end
+			else
+			begin
+				next_state = current_state;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 1;
+				soap_wash = 1;
+				water_wash = 0;
+				done = 0;
+			end
+			cycle:
+
+			if(cycle_timeout == 1)
+			begin
+				if(water_wash == 0)
+				begin
+					next_state = drain_water;
+					motor_on = 0;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 0;
+					done = 0;
+				end
+				else
+				begin
+					next_state = drain_water;
+					motor_on = 0;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 1;
+					done = 0;
+				end
+			end
+			else
+			begin
+				if(water_wash == 0)
+				begin
+					next_state = current_state;
+					motor_on = 1;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 0;
+					done = 0;
+				end
+				else
+				begin
+					next_state = current_state;
+					motor_on = 1;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 1;
+					done = 0;
+				end
+			end
+			drain_water:
+			 if(drained==1)
+			 begin
+				if(water_wash==0)
+				begin
+					next_state = fill_water;
+					motor_on = 0;
+					fill_value_on = 0;
+					drain_value_on = 0;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 0;
+					done = 0;
+				end
+				else
+				begin
+				        next_state = spin;
+					motor_on = 0;
+					fill_value_on = 0;
+					drain_value_on = 1;
+					door_lock = 1;
+					soap_wash = 1;
+					water_wash = 1;
+					done = 0;
+				end
+			end
+			else
+			begin
+				next_state = current_state;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 1;
+				soap_wash = 1;
+				water_wash = 0;
+				done = 0;
+			end
+			spin:
+			if(spin_timeout==1)
+			begin
+				next_state = door_close;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 1;
+				soap_wash = 1;
+				water_wash = 1;
+				done = 1;
+			end
+			else
+			begin
+				next_state = current_state;
+				motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 1;
+				door_lock = 1;
+				soap_wash = 1;
+				water_wash = 1;
+				done = 0;
+			end
+			default: begin
+                                next_state = check_door;
+                                motor_on = 0;
+				fill_value_on = 0;
+				drain_value_on = 0;
+				door_lock = 0;
+				soap_wash = 0;
+				water_wash = 0;
+				done = 0;
+		        end
+                                
+				
+			endcase
+	end
+	
+	always@(posedge clk or posedge reset)
+	begin
+		if(reset)
+		begin
+			current_state<=3'b000;
+		end
+		else
+		begin
+			current_state<=next_state;
+		end
+	end
+	
 endmodule
+
+
+
 `default_nettype wire
